@@ -1,9 +1,10 @@
 import express from 'express';
 import path from 'path';
 import { aggregateNews, getSourceList, clearCache } from './aggregator';
+import { AI_CATEGORIES } from './types';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Serve static frontend files
 app.use(express.static(path.join(__dirname, 'public')));
@@ -33,18 +34,23 @@ app.get('/api/news/source/:source', async (req, res) => {
   }
 });
 
-// API: Get news filtered by category
+// API: Get news filtered by AI category
 app.get('/api/news/category/:category', async (req, res) => {
   try {
     const news = await aggregateNews();
     const filtered = news.articles.filter(
-      (a) => a.category?.toLowerCase() === req.params.category.toLowerCase()
+      (a) => (a.aiCategory || a.category || '').toLowerCase() === req.params.category.toLowerCase()
     );
     res.json({ ...news, articles: filtered });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: 'Failed to fetch news', details: message });
   }
+});
+
+// API: List all AI categories
+app.get('/api/categories', (_req, res) => {
+  res.json(AI_CATEGORIES);
 });
 
 // API: List all sources

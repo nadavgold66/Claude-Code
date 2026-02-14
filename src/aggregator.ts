@@ -2,6 +2,7 @@ import { NewsArticle, AggregatedNews } from './types';
 import { NEWS_SOURCES } from './sources';
 import { scrapeSource } from './scrapers/rssScraper';
 import { scrapeWebPage } from './scrapers/webScraper';
+import { enrichArticlesWithAi } from './ai';
 
 let cachedNews: AggregatedNews | null = null;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -62,8 +63,11 @@ export async function aggregateNews(): Promise<AggregatedNews> {
     `Fetched ${sorted.length} unique articles from ${successfulSources} feeds in ${elapsed}ms`
   );
 
+  // Enrich articles with AI summaries and categories
+  const enriched = await enrichArticlesWithAi(sorted);
+
   cachedNews = {
-    articles: sorted,
+    articles: enriched,
     lastUpdated: new Date(),
     sourceCount: successfulSources,
   };

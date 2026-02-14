@@ -17,6 +17,12 @@
       --breaking: #ef4444;
       --business: #10b981;
       --general: #6366f1;
+      --politics: #f59e0b;
+      --security: #ef4444;
+      --sports: #22c55e;
+      --technology: #8b5cf6;
+      --entertainment: #ec4899;
+      --health: #14b8a6;
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -167,6 +173,47 @@
     .category-breaking { background: rgba(239, 68, 68, 0.15); color: var(--breaking); }
     .category-business { background: rgba(16, 185, 129, 0.15); color: var(--business); }
     .category-general { background: rgba(99, 102, 241, 0.15); color: var(--general); }
+    .category-politics { background: rgba(245, 158, 11, 0.15); color: var(--politics); }
+    .category-security { background: rgba(239, 68, 68, 0.15); color: var(--security); }
+    .category-sports { background: rgba(34, 197, 94, 0.15); color: var(--sports); }
+    .category-technology { background: rgba(139, 92, 246, 0.15); color: var(--technology); }
+    .category-entertainment { background: rgba(236, 72, 153, 0.15); color: var(--entertainment); }
+    .category-health { background: rgba(20, 184, 166, 0.15); color: var(--health); }
+
+    .ai-summary {
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+      margin-top: 0.5rem;
+      padding: 0.5rem 0.6rem;
+      background: rgba(59, 130, 246, 0.06);
+      border-right: 2px solid var(--accent);
+      border-radius: 0 6px 6px 0;
+      line-height: 1.5;
+    }
+
+    .ai-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 0.2rem;
+    }
+
+    .category-filters {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 0.5rem 2rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .category-filters .filter-btn {
+      font-size: 0.8rem;
+      padding: 0.3rem 0.7rem;
+    }
 
     .article-title {
       font-size: 1.05rem;
@@ -259,6 +306,9 @@
     </div>
   </header>
   <div class="stats" id="stats"></div>
+  <div class="category-filters" id="categoryFilters">
+    <button class="filter-btn active" data-cat-filter="all" onclick="setCategoryFilter('all', this)">כל הקטגוריות</button>
+  </div>
   <main>
     <div id="content">
       <div class="loading">
@@ -271,7 +321,20 @@
   <script>
     let allArticles = [];
     let activeFilter = 'all';
+    let activeCategoryFilter = 'all';
     let sources = [];
+
+    const categoryLabels = {
+      Politics: 'פוליטיקה',
+      Security: 'ביטחון',
+      Business: 'עסקים',
+      Sports: 'ספורט',
+      Technology: 'טכנולוגיה',
+      Entertainment: 'בידור',
+      Health: 'בריאות',
+      General: 'כללי',
+      Breaking: 'מבזק',
+    };
 
     function getSourceClass(source) {
       return 'source-' + source.replace(/\s+/g, '').toLowerCase();
@@ -280,9 +343,13 @@
     function getCategoryClass(category) {
       if (!category) return 'category-general';
       const cat = category.toLowerCase();
-      if (cat === 'breaking') return 'category-breaking';
-      if (cat === 'business') return 'category-business';
+      const validCats = ['breaking', 'business', 'general', 'politics', 'security', 'sports', 'technology', 'entertainment', 'health'];
+      if (validCats.includes(cat)) return 'category-' + cat;
       return 'category-general';
+    }
+
+    function getDisplayCategory(article) {
+      return article.aiCategory || article.category || 'General';
     }
 
     function timeAgo(date) {
@@ -305,35 +372,52 @@
         return;
       }
 
-      const html = '<div class="articles-grid">' + articles.map(article => `
+      const html = '<div class="articles-grid">' + articles.map(article => {
+        const displayCat = getDisplayCategory(article);
+        return `
         <div class="article-card">
           ${article.imageUrl ? `<img class="article-image" src="${article.imageUrl}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}
           <div class="article-body">
             <div class="article-meta">
               <span class="source-badge ${getSourceClass(article.source)}">${article.source}</span>
-              <span class="category-badge ${getCategoryClass(article.category)}">${article.category || 'General'}</span>
+              <span class="category-badge ${getCategoryClass(displayCat)}">${categoryLabels[displayCat] || displayCat}</span>
             </div>
             <h3 class="article-title">
               <a href="${article.url}" target="_blank" rel="noopener noreferrer">${article.title}</a>
             </h3>
             <p class="article-description">${article.description || ''}</p>
+            ${article.aiSummary ? `<div class="ai-summary"><div class="ai-label">AI סיכום</div>${article.aiSummary}</div>` : ''}
             <div class="article-time">${timeAgo(article.publishedAt)}</div>
           </div>
         </div>
-      `).join('') + '</div>';
+      `}).join('') + '</div>';
 
       document.getElementById('content').innerHTML = html;
     }
 
     function filterArticles() {
-      if (activeFilter === 'all') {
-        renderArticles(allArticles);
-      } else {
-        const filtered = allArticles.filter(a =>
+      let filtered = allArticles;
+
+      if (activeFilter !== 'all') {
+        filtered = filtered.filter(a =>
           a.source.toLowerCase() === activeFilter.toLowerCase()
         );
-        renderArticles(filtered);
       }
+
+      if (activeCategoryFilter !== 'all') {
+        filtered = filtered.filter(a =>
+          getDisplayCategory(a).toLowerCase() === activeCategoryFilter.toLowerCase()
+        );
+      }
+
+      renderArticles(filtered);
+    }
+
+    function setCategoryFilter(cat, btn) {
+      activeCategoryFilter = cat;
+      document.querySelectorAll('#categoryFilters .filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      filterArticles();
     }
 
     function setFilter(filter, btn) {
@@ -341,6 +425,33 @@
       document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       filterArticles();
+    }
+
+    function buildCategoryFilters(articles) {
+      const catCounts = {};
+      articles.forEach(a => {
+        const cat = getDisplayCategory(a);
+        catCounts[cat] = (catCounts[cat] || 0) + 1;
+      });
+
+      const container = document.getElementById('categoryFilters');
+      const allBtn = container.querySelector('[data-cat-filter="all"]');
+
+      // Remove old category buttons (keep the "all" button)
+      container.querySelectorAll('.filter-btn:not([data-cat-filter="all"])').forEach(b => b.remove());
+
+      allBtn.textContent = `כל הקטגוריות (${articles.length})`;
+
+      Object.entries(catCounts)
+        .sort((a, b) => b[1] - a[1])
+        .forEach(([cat, count]) => {
+          const btn = document.createElement('button');
+          btn.className = 'filter-btn';
+          btn.dataset.catFilter = cat;
+          btn.textContent = `${categoryLabels[cat] || cat} (${count})`;
+          btn.onclick = () => setCategoryFilter(cat, btn);
+          container.appendChild(btn);
+        });
     }
 
     function buildSourceFilters(articles) {
@@ -385,6 +496,7 @@
           `${data.articles.length} כתבות מ-${data.sourceCount} מקורות | עודכן: ${new Date(data.lastUpdated).toLocaleTimeString('he-IL')}`;
 
         buildSourceFilters(allArticles);
+        buildCategoryFilters(allArticles);
         filterArticles();
       } catch (error) {
         document.getElementById('content').innerHTML =

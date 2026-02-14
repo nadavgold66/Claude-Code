@@ -1,3 +1,16 @@
+export const AI_CATEGORIES = [
+  'Politics',
+  'Security',
+  'Business',
+  'Sports',
+  'Technology',
+  'Entertainment',
+  'Health',
+  'General',
+] as const;
+
+export type AiCategory = typeof AI_CATEGORIES[number];
+
 export interface NewsArticle {
   title: string;
   description: string;
@@ -6,6 +19,8 @@ export interface NewsArticle {
   source: string;
   sourceLogoUrl?: string;
   category?: string;
+  aiCategory?: AiCategory;
+  aiSummary?: string;
   publishedAt: Date;
   scrapedAt: Date;
 }
