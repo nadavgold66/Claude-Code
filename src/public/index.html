@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Israeli News Aggregator | מצבור חדשות ישראלי</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface-hover: #22262f;
+      --border: #2a2e3a;
+      --text: #e4e6eb;
+      --text-secondary: #9ba1b0;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --breaking: #ef4444;
+      --business: #10b981;
+      --general: #6366f1;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .header-content {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    h1 .flag { font-size: 1.8rem; }
+
+    .controls {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .filter-btn {
+      padding: 0.4rem 0.9rem;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: all 0.2s;
+    }
+
+    .filter-btn:hover { border-color: var(--accent); color: var(--text); }
+    .filter-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+    .refresh-btn {
+      padding: 0.4rem 0.9rem;
+      border-radius: 20px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: white;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: all 0.2s;
+    }
+
+    .refresh-btn:hover { background: var(--accent-hover); }
+    .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .stats {
+      text-align: center;
+      padding: 0.5rem 2rem;
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+
+    .articles-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 1rem;
+    }
+
+    .article-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      transition: transform 0.2s, border-color 0.2s;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .article-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent);
+    }
+
+    .article-image {
+      width: 100%;
+      height: 180px;
+      object-fit: cover;
+      background: var(--border);
+    }
+
+    .article-body {
+      padding: 1rem;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .article-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+      font-size: 0.8rem;
+    }
+
+    .source-badge {
+      padding: 0.2rem 0.6rem;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 0.75rem;
+    }
+
+    .category-badge {
+      padding: 0.15rem 0.5rem;
+      border-radius: 10px;
+      font-size: 0.7rem;
+      font-weight: 500;
+    }
+
+    .category-breaking { background: rgba(239, 68, 68, 0.15); color: var(--breaking); }
+    .category-business { background: rgba(16, 185, 129, 0.15); color: var(--business); }
+    .category-general { background: rgba(99, 102, 241, 0.15); color: var(--general); }
+
+    .article-title {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      line-height: 1.4;
+    }
+
+    .article-title a {
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    .article-title a:hover { color: var(--accent); }
+
+    .article-description {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      flex: 1;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .article-time {
+      color: var(--text-secondary);
+      font-size: 0.8rem;
+      margin-top: 0.75rem;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 4rem;
+      color: var(--text-secondary);
+    }
+
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 1rem;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .error {
+      text-align: center;
+      padding: 2rem;
+      color: var(--breaking);
+      background: rgba(239, 68, 68, 0.1);
+      border-radius: 12px;
+      margin: 2rem;
+    }
+
+    /* Source colors */
+    .source-ynet { background: rgba(255, 0, 0, 0.12); color: #ff4444; }
+    .source-haaretz { background: rgba(0, 128, 0, 0.12); color: #4caf50; }
+    .source-maariv { background: rgba(0, 0, 255, 0.12); color: #5c7cfa; }
+    .source-walla { background: rgba(255, 165, 0, 0.12); color: #ffa726; }
+    .source-israelhayom { background: rgba(30, 136, 229, 0.12); color: #42a5f5; }
+    .source-kannews { background: rgba(156, 39, 176, 0.12); color: #ab47bc; }
+    .source-channel12news { background: rgba(233, 30, 99, 0.12); color: #ec407a; }
+    .source-channel13news { background: rgba(0, 150, 136, 0.12); color: #26a69a; }
+    .source-globes { background: rgba(255, 193, 7, 0.12); color: #ffc107; }
+    .source-calcalist { background: rgba(255, 87, 34, 0.12); color: #ff7043; }
+
+    @media (max-width: 768px) {
+      .articles-grid {
+        grid-template-columns: 1fr;
+      }
+      .header-content {
+        flex-direction: column;
+        text-align: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-content">
+      <h1><span class="flag">&#127470;&#127473;</span> מצבור חדשות ישראלי</h1>
+      <div class="controls" id="controls">
+        <button class="filter-btn active" data-filter="all">הכל</button>
+        <button class="refresh-btn" id="refreshBtn" onclick="refreshNews()">רענון</button>
+      </div>
+    </div>
+  </header>
+  <div class="stats" id="stats"></div>
+  <main>
+    <div id="content">
+      <div class="loading">
+        <div class="loading-spinner"></div>
+        <p>טוען חדשות מכל המקורות...</p>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let allArticles = [];
+    let activeFilter = 'all';
+    let sources = [];
+
+    function getSourceClass(source) {
+      return 'source-' + source.replace(/\s+/g, '').toLowerCase();
+    }
+
+    function getCategoryClass(category) {
+      if (!category) return 'category-general';
+      const cat = category.toLowerCase();
+      if (cat === 'breaking') return 'category-breaking';
+      if (cat === 'business') return 'category-business';
+      return 'category-general';
+    }
+
+    function timeAgo(date) {
+      const now = new Date();
+      const diff = now - new Date(date);
+      const minutes = Math.floor(diff / 60000);
+      const hours = Math.floor(diff / 3600000);
+      const days = Math.floor(diff / 86400000);
+
+      if (minutes < 1) return 'הרגע';
+      if (minutes < 60) return `לפני ${minutes} דקות`;
+      if (hours < 24) return `לפני ${hours} שעות`;
+      return `לפני ${days} ימים`;
+    }
+
+    function renderArticles(articles) {
+      if (articles.length === 0) {
+        document.getElementById('content').innerHTML =
+          '<div class="error">לא נמצאו כתבות. נסה לרענן.</div>';
+        return;
+      }
+
+      const html = '<div class="articles-grid">' + articles.map(article => `
+        <div class="article-card">
+          ${article.imageUrl ? `<img class="article-image" src="${article.imageUrl}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}
+          <div class="article-body">
+            <div class="article-meta">
+              <span class="source-badge ${getSourceClass(article.source)}">${article.source}</span>
+              <span class="category-badge ${getCategoryClass(article.category)}">${article.category || 'General'}</span>
+            </div>
+            <h3 class="article-title">
+              <a href="${article.url}" target="_blank" rel="noopener noreferrer">${article.title}</a>
+            </h3>
+            <p class="article-description">${article.description || ''}</p>
+            <div class="article-time">${timeAgo(article.publishedAt)}</div>
+          </div>
+        </div>
+      `).join('') + '</div>';
+
+      document.getElementById('content').innerHTML = html;
+    }
+
+    function filterArticles() {
+      if (activeFilter === 'all') {
+        renderArticles(allArticles);
+      } else {
+        const filtered = allArticles.filter(a =>
+          a.source.toLowerCase() === activeFilter.toLowerCase()
+        );
+        renderArticles(filtered);
+      }
+    }
+
+    function setFilter(filter, btn) {
+      activeFilter = filter;
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      filterArticles();
+    }
+
+    function buildSourceFilters(articles) {
+      const sourceCounts = {};
+      articles.forEach(a => {
+        sourceCounts[a.source] = (sourceCounts[a.source] || 0) + 1;
+      });
+
+      const controls = document.getElementById('controls');
+      const existingFilters = controls.querySelectorAll('.filter-btn:not([data-filter="all"])');
+      existingFilters.forEach(f => f.remove());
+
+      const refreshBtn = document.getElementById('refreshBtn');
+
+      Object.entries(sourceCounts)
+        .sort((a, b) => b[1] - a[1])
+        .forEach(([source, count]) => {
+          const btn = document.createElement('button');
+          btn.className = 'filter-btn';
+          btn.dataset.filter = source;
+          btn.textContent = `${source} (${count})`;
+          btn.onclick = () => setFilter(source, btn);
+          controls.insertBefore(btn, refreshBtn);
+        });
+
+      // Re-attach all filter
+      const allBtn = controls.querySelector('[data-filter="all"]');
+      if (allBtn) {
+        allBtn.textContent = `הכל (${articles.length})`;
+        allBtn.onclick = () => setFilter('all', allBtn);
+      }
+    }
+
+    async function fetchNews() {
+      try {
+        const response = await fetch('/api/news');
+        if (!response.ok) throw new Error('Failed to fetch');
+        const data = await response.json();
+        allArticles = data.articles;
+
+        document.getElementById('stats').textContent =
+          `${data.articles.length} כתבות מ-${data.sourceCount} מקורות | עודכן: ${new Date(data.lastUpdated).toLocaleTimeString('he-IL')}`;
+
+        buildSourceFilters(allArticles);
+        filterArticles();
+      } catch (error) {
+        document.getElementById('content').innerHTML =
+          `<div class="error">שגיאה בטעינת חדשות: ${error.message}</div>`;
+      }
+    }
+
+    async function refreshNews() {
+      const btn = document.getElementById('refreshBtn');
+      btn.disabled = true;
+      btn.textContent = 'מרענן...';
+
+      try {
+        await fetch('/api/refresh', { method: 'POST' });
+        await fetchNews();
+      } catch (error) {
+        console.error('Refresh failed:', error);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'רענון';
+      }
+    }
+
+    // Initial load
+    fetchNews();
+
+    // Auto-refresh every 5 minutes
+    setInterval(fetchNews, 5 * 60 * 1000);
+  </script>
+</body>
+</html>

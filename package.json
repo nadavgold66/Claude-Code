@@ -1,0 +1,25 @@
+{
+  "name": "israeli-news-aggregator",
+  "version": "1.0.0",
+  "description": "Aggregates news articles from major Israeli news channels",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc && cp -r src/public dist/public",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts"
+  },
+  "keywords": ["news", "israel", "aggregator", "rss"],
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.0",
+    "cheerio": "^1.0.0",
+    "express": "^4.21.0",
+    "rss-parser": "^3.13.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
