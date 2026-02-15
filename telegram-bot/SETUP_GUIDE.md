@@ -173,9 +173,23 @@ The bot is now live.
 
 ---
 
-## Summary: What should be running
+## Quick Start (single terminal)
 
-You need **two terminal windows** at the same time:
+After completing Steps 1–4 and 6–8, you can run everything with **one command** instead of managing two terminals:
+
+```bash
+cd Claude-Code
+export TELEGRAM_BOT_TOKEN="paste-your-token-here"
+./start.sh
+```
+
+This starts both the aggregator and the bot together. Press **Ctrl+C** to stop everything.
+
+---
+
+## Summary: What should be running (manual method)
+
+If you prefer running things separately, you need **two terminal windows** at the same time:
 
 | Terminal | What's running | Command |
 |----------|---------------|---------|
