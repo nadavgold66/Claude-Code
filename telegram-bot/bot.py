@@ -229,4 +229,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import asyncio
+    # Python 3.14+ removed auto-creation of event loops;
+    # ensure one exists before python-telegram-bot tries to use it.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
     main()
