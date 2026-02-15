@@ -92,12 +92,25 @@ Israeli News Aggregator running at http://localhost:3000
 
 Open a **new terminal window** (keep the aggregator running in the first one).
 
-Navigate to the bot folder:
+Navigate to the bot folder. If you just opened a fresh terminal, you'll need the full path from wherever the repository was cloned:
 
 ```bash
 cd Claude-Code/telegram-bot
-pip install -r requirements.txt
 ```
+
+If you're already inside the `Claude-Code` folder, just run:
+
+```bash
+cd telegram-bot
+```
+
+Then install the dependencies:
+
+```bash
+pip3 install -r requirements.txt
+```
+
+> **Note:** If `pip3` is not found, try `pip` instead. If neither works, reinstall Python and make sure "Add Python to PATH" is checked (see Step 2).
 
 Wait for the installation to finish.
 
@@ -131,8 +144,10 @@ Replace `paste-your-token-here` with the actual token from BotFather.
 In the same terminal:
 
 ```bash
-python bot.py
+python3 bot.py
 ```
+
+> **Note:** If `python3` doesn't work, try `python bot.py` instead.
 
 You should see:
 
@@ -165,7 +180,7 @@ You need **two terminal windows** at the same time:
 | Terminal | What's running | Command |
 |----------|---------------|---------|
 | Terminal 1 | News aggregator | `npm run dev` |
-| Terminal 2 | Telegram bot | `python bot.py` |
+| Terminal 2 | Telegram bot | `python3 bot.py` |
 
 If you close either one, the bot won't work properly.
 
