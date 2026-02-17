@@ -207,7 +207,7 @@ def summarize_with_gemini(articles: list[dict]) -> str:
         raise ValueError("GEMINI_API_KEY environment variable is not set")
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-2.0-flash")
 
     # Build article text (cap at 60 articles to stay within token limits)
     article_lines = []
