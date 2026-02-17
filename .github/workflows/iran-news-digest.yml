@@ -1,0 +1,38 @@
+name: Iran News Digest
+
+on:
+  schedule:
+    # Morning run — 07:00 UTC (9:00 AM Israel / 10:30 AM Iran)
+    - cron: '0 7 * * *'
+    # Evening run — 16:00 UTC (6:00 PM Israel / 7:30 PM Iran)
+    - cron: '0 16 * * *'
+  # Allow manual trigger from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  send-digest:
+    name: Fetch, Summarize & Email
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: iran_digest/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r iran_digest/requirements.txt
+
+      - name: Run Iran News Digest
+        env:
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          RESEND_API_KEY:    ${{ secrets.RESEND_API_KEY }}
+          RECIPIENT_EMAIL:   ${{ secrets.RECIPIENT_EMAIL }}
+          # Optional: set a verified sender address (see SETUP.md)
+          # SENDER_EMAIL:    ${{ secrets.SENDER_EMAIL }}
+        run: python iran_digest/iran_news_digest.py
