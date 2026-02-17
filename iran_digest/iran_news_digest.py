@@ -204,9 +204,9 @@ Respond ONLY with the numbered digest (1 through 10). No preamble, no closing re
 def summarize_with_gemini(articles: list[dict]) -> str:
     """Use Gemini to summarize the top 10 stories.
 
-    Tries gemini-1.5-flash first (separate quota), falls back to
-    gemini-2.0-flash. Retries up to 3 times with exponential backoff on
-    429 rate-limit errors.
+    Tries multiple models in order (each has its own independent quota).
+    On 404 or daily-quota exhaustion moves immediately to the next model.
+    On per-minute 429 retries with exponential backoff.
     """
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -214,9 +214,9 @@ def summarize_with_gemini(articles: list[dict]) -> str:
 
     genai.configure(api_key=api_key)
 
-    # Build article text (cap at 30 articles to stay within free-tier token limits)
+    # Build article text (cap at 20 articles to stay within free-tier token limits)
     article_lines = []
-    for i, a in enumerate(articles[:30], 1):
+    for i, a in enumerate(articles[:20], 1):
         pub = a["published"].strftime("%b %d, %H:%M UTC")
         article_lines.append(
             f"{i}. [{a['source']}] ({pub})\n   TITLE: {a['title']}\n   DESC: {a['description']}"
@@ -230,7 +230,14 @@ def summarize_with_gemini(articles: list[dict]) -> str:
         max_output_tokens=2048,
     )
 
-    models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash"]
+    # Each model has its own independent daily free-tier quota.
+    # gemini-2.0-flash-lite and gemini-1.5-flash-8b are separate quotas
+    # from gemini-2.0-flash, so exhausting one does not affect the others.
+    models_to_try = [
+        "gemini-2.0-flash-lite",   # lightest 2.0 model — own daily quota
+        "gemini-1.5-flash-8b",     # small 1.5 model — own daily quota
+        "gemini-2.0-flash",        # main 2.0 model — may be exhausted
+    ]
     last_exc: Exception = RuntimeError("No models attempted")
 
     for model_name in models_to_try:
@@ -249,8 +256,9 @@ def summarize_with_gemini(articles: list[dict]) -> str:
                     print(f"  Rate limited, retrying in {wait}s...")
                     time.sleep(wait)
                     continue
-                # Daily quota or non-retriable error — try next model
-                print(f"  {model_name} unavailable: {exc}")
+                # Daily quota, 404, or other non-retriable error — try next model
+                reason = str(exc).split("\n")[0][:120]
+                print(f"  {model_name} unavailable: {reason}")
                 break
 
     raise last_exc
