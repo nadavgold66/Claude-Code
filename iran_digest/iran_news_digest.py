@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import re
+import time
 import requests
 import feedparser
 import google.generativeai as genai
@@ -137,7 +138,7 @@ def fetch_articles() -> list[dict]:
                     entry.get("summary", entry.get("description", "")).strip()
                 )
                 # Strip HTML tags from description
-                description = re.sub(r"<[^>]+>", "", description)[:400]
+                description = re.sub(r"<[^>]+>", "", description)[:200]
                 link = entry.get("link", "").strip()
 
                 if not title or not link:
@@ -201,17 +202,21 @@ Respond ONLY with the numbered digest (1 through 10). No preamble, no closing re
 
 
 def summarize_with_gemini(articles: list[dict]) -> str:
-    """Use Gemini 1.5 Flash to summarize the top 10 stories."""
+    """Use Gemini to summarize the top 10 stories.
+
+    Tries gemini-1.5-flash first (separate quota), falls back to
+    gemini-2.0-flash. Retries up to 3 times with exponential backoff on
+    429 rate-limit errors.
+    """
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable is not set")
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
 
-    # Build article text (cap at 60 articles to stay within token limits)
+    # Build article text (cap at 30 articles to stay within free-tier token limits)
     article_lines = []
-    for i, a in enumerate(articles[:60], 1):
+    for i, a in enumerate(articles[:30], 1):
         pub = a["published"].strftime("%b %d, %H:%M UTC")
         article_lines.append(
             f"{i}. [{a['source']}] ({pub})\n   TITLE: {a['title']}\n   DESC: {a['description']}"
@@ -220,14 +225,35 @@ def summarize_with_gemini(articles: list[dict]) -> str:
     articles_text = "\n\n".join(article_lines)
     prompt = GEMINI_PROMPT.format(articles=articles_text)
 
-    response = model.generate_content(
-        prompt,
-        generation_config=genai.GenerationConfig(
-            temperature=0.3,
-            max_output_tokens=2048,
-        ),
+    generation_config = genai.GenerationConfig(
+        temperature=0.3,
+        max_output_tokens=2048,
     )
-    return response.text.strip()
+
+    models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash"]
+    last_exc: Exception = RuntimeError("No models attempted")
+
+    for model_name in models_to_try:
+        model = genai.GenerativeModel(model_name)
+        for attempt in range(4):  # up to 4 attempts per model
+            try:
+                print(f"  Calling {model_name} (attempt {attempt + 1})...")
+                response = model.generate_content(prompt, generation_config=generation_config)
+                return response.text.strip()
+            except Exception as exc:
+                last_exc = exc
+                err_str = str(exc)
+                # Only retry on transient rate-limit errors, not daily quota exhaustion
+                if "429" in err_str and "PerDay" not in err_str and attempt < 3:
+                    wait = 2 ** (attempt + 1)  # 2, 4, 8 seconds
+                    print(f"  Rate limited, retrying in {wait}s...")
+                    time.sleep(wait)
+                    continue
+                # Daily quota or non-retriable error — try next model
+                print(f"  {model_name} unavailable: {exc}")
+                break
+
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
