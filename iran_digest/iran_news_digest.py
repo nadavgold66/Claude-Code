@@ -192,6 +192,10 @@ and international diplomacy.
 Rank them from most to least significant. Use clear, neutral language.
 Do NOT repeat the same event twice. Consolidate duplicate stories.
 
+At the end of each item, on its own line, write: SOURCE: [N]
+where N is the number of the single article from the ARTICLES list below that best
+supports that story. Use only one number. Do not omit the SOURCE line.
+
 ---
 
 ARTICLES:
@@ -342,7 +346,7 @@ def summarize_with_gemini(articles: list[dict]) -> str:
 # Email (Resend)
 # ---------------------------------------------------------------------------
 
-def _digest_to_html(digest: str) -> str:
+def _digest_to_html(digest: str, articles: list[dict]) -> str:
     """Convert the plain-text numbered digest to styled HTML blocks."""
     blocks = []
     # Split on numbered items like "1." or "1 " at start of line
@@ -364,6 +368,20 @@ def _digest_to_html(digest: str) -> str:
             border = "#7f8c8d"
             badge = ""
 
+        # Extract SOURCE: [N] reference and remove it from the displayed text
+        source_link_html = ""
+        source_match = re.search(r"SOURCE:\s*\[?(\d+)\]?", item, re.IGNORECASE)
+        if source_match:
+            article_idx = int(source_match.group(1)) - 1
+            if 0 <= article_idx < len(articles):
+                url = articles[article_idx]["url"]
+                src_name = articles[article_idx]["source"]
+                source_link_html = (
+                    f' <a href="{url}" style="color:#0f3460;font-size:12px;'
+                    f'text-decoration:none;white-space:nowrap;">Read more → ({src_name})</a>'
+                )
+            item = re.sub(r"\n?SOURCE:\s*\[?\d+\]?", "", item, flags=re.IGNORECASE).strip()
+
         # Bold first line (headline), rest is body
         lines = item.split("\n", 2)
         headline = lines[0].strip()
@@ -371,7 +389,7 @@ def _digest_to_html(digest: str) -> str:
         if len(lines) > 2:
             body += " " + lines[2].strip()
 
-        # Clean emoji from headline for the title
+        # Clean significance tags from body text
         body = body.replace("🔴 High", "").replace("🟡 Medium", "").strip()
         body = re.sub(r"Significance:\s*", "", body).strip()
 
@@ -379,7 +397,7 @@ def _digest_to_html(digest: str) -> str:
             f"""<div style="border-left:4px solid {border};padding:14px 18px;
                            margin-bottom:18px;background:#fafafa;border-radius:0 6px 6px 0;">
               <p style="margin:0 0 6px;font-size:16px;font-weight:700;color:#1a1a2e;">{headline} {badge}</p>
-              <p style="margin:0;font-size:14px;color:#444;line-height:1.6;">{body}</p>
+              <p style="margin:0;font-size:14px;color:#444;line-height:1.6;">{body}{source_link_html}</p>
             </div>"""
         )
 
@@ -390,7 +408,7 @@ def build_html_email(digest: str, articles: list[dict], run_time: datetime) -> s
     """Assemble the full HTML email."""
     time_str = run_time.strftime("%A, %B %d, %Y — %H:%M UTC")
     slot = "Morning" if run_time.hour < 14 else "Evening"
-    digest_html = _digest_to_html(digest)
+    digest_html = _digest_to_html(digest, articles)
 
     # Source list (first 20 unique sources with their article titles as links)
     seen_sources: set[str] = set()
@@ -449,7 +467,7 @@ def build_html_email(digest: str, articles: list[dict], run_time: datetime) -> s
         <tr><td style="background:#1a1a2e;padding:20px 40px;border-radius:0 0 10px 10px;
                         text-align:center;">
           <p style="margin:0;color:#7a8898;font-size:11px;">
-            Automated digest · Powered by Google Gemini 1.5 Flash · Delivered via Resend
+            Automated digest · Powered by Groq (Llama 3.3) · Delivered via Resend
           </p>
         </td></tr>
 
