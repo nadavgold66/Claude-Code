@@ -230,9 +230,9 @@ def summarize_with_gemini(articles: list[dict]) -> str:
         max_output_tokens=2048,
     )
 
-    # Each model has its own independent daily free-tier quota.
-    # gemini-2.0-flash-lite and gemini-1.5-flash-8b are separate quotas
-    # from gemini-2.0-flash, so exhausting one does not affect the others.
+    # Each model has its own independent per-minute AND daily free-tier quota.
+    # On any 429 (per-minute or per-day), immediately try the next model —
+    # cycling is faster than waiting for the same model's quota to reset.
     models_to_try = [
         "gemini-2.0-flash-lite",   # lightest 2.0 model — own daily quota
         "gemini-1.5-flash-8b",     # small 1.5 model — own daily quota
@@ -242,7 +242,7 @@ def summarize_with_gemini(articles: list[dict]) -> str:
 
     for model_name in models_to_try:
         model = genai.GenerativeModel(model_name)
-        for attempt in range(4):  # up to 4 attempts per model
+        for attempt in range(3):  # up to 3 attempts per model (for transient non-quota errors)
             try:
                 print(f"  Calling {model_name} (attempt {attempt + 1})...")
                 response = model.generate_content(prompt, generation_config=generation_config)
@@ -250,16 +250,22 @@ def summarize_with_gemini(articles: list[dict]) -> str:
             except Exception as exc:
                 last_exc = exc
                 err_str = str(exc)
-                # Only retry on transient rate-limit errors, not daily quota exhaustion
-                if "429" in err_str and "PerDay" not in err_str and attempt < 3:
-                    wait = 2 ** (attempt + 1)  # 2, 4, 8 seconds
-                    print(f"  Rate limited, retrying in {wait}s...")
-                    time.sleep(wait)
-                    continue
-                # Daily quota, 404, or other non-retriable error — try next model
                 reason = str(exc).split("\n")[0][:120]
-                print(f"  {model_name} unavailable: {reason}")
-                break
+                if "429" in err_str:
+                    # Any quota error (per-minute or per-day): immediately try next model.
+                    # Each model has its own separate quota, so skipping is always better
+                    # than waiting — the next model's quota is unaffected.
+                    quota_type = "daily" if "PerDay" in err_str else "per-minute"
+                    print(f"  {model_name} {quota_type} quota exceeded — trying next model")
+                    break
+                elif attempt < 2:
+                    # Transient non-quota error (network blip, 503, etc.) — retry with backoff
+                    wait = 2 ** (attempt + 1)  # 2, 4 seconds
+                    print(f"  {model_name} error, retrying in {wait}s: {reason}")
+                    time.sleep(wait)
+                else:
+                    print(f"  {model_name} unavailable: {reason}")
+                    break
 
     raise last_exc
 
