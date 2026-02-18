@@ -231,12 +231,13 @@ def summarize_with_gemini(articles: list[dict]) -> str:
     )
 
     # Each model has its own independent per-minute AND daily free-tier quota.
-    # On any 429 (per-minute or per-day), immediately try the next model —
+    # On any 429 (per-minute or per-day) or 404, immediately try the next model —
     # cycling is faster than waiting for the same model's quota to reset.
     models_to_try = [
         "gemini-2.0-flash-lite",   # lightest 2.0 model — own daily quota
-        "gemini-1.5-flash-8b",     # small 1.5 model — own daily quota
+        "gemini-1.5-flash",        # 1.5 flash — own daily quota
         "gemini-2.0-flash",        # main 2.0 model — may be exhausted
+        "gemini-1.5-pro",          # 1.5 pro — lower RPM but separate daily quota
     ]
     last_exc: Exception = RuntimeError("No models attempted")
 
@@ -257,6 +258,10 @@ def summarize_with_gemini(articles: list[dict]) -> str:
                     # than waiting — the next model's quota is unaffected.
                     quota_type = "daily" if "PerDay" in err_str else "per-minute"
                     print(f"  {model_name} {quota_type} quota exceeded — trying next model")
+                    break
+                elif "404" in err_str:
+                    # Model not found / not supported — skip immediately, no point retrying.
+                    print(f"  {model_name} not available (404) — trying next model")
                     break
                 elif attempt < 2:
                     # Transient non-quota error (network blip, 503, etc.) — retry with backoff
