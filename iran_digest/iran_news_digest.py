@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import re
+import time
 import requests
 import feedparser
 import google.generativeai as genai
@@ -137,7 +138,7 @@ def fetch_articles() -> list[dict]:
                     entry.get("summary", entry.get("description", "")).strip()
                 )
                 # Strip HTML tags from description
-                description = re.sub(r"<[^>]+>", "", description)[:400]
+                description = re.sub(r"<[^>]+>", "", description)[:200]
                 link = entry.get("link", "").strip()
 
                 if not title or not link:
@@ -201,17 +202,21 @@ Respond ONLY with the numbered digest (1 through 10). No preamble, no closing re
 
 
 def summarize_with_gemini(articles: list[dict]) -> str:
-    """Use Gemini 1.5 Flash to summarize the top 10 stories."""
+    """Use Gemini to summarize the top 10 stories.
+
+    Tries multiple models in order (each has its own independent quota).
+    On 404 or daily-quota exhaustion moves immediately to the next model.
+    On per-minute 429 retries with exponential backoff.
+    """
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable is not set")
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
 
-    # Build article text (cap at 60 articles to stay within token limits)
+    # Build article text (cap at 20 articles to stay within free-tier token limits)
     article_lines = []
-    for i, a in enumerate(articles[:60], 1):
+    for i, a in enumerate(articles[:20], 1):
         pub = a["published"].strftime("%b %d, %H:%M UTC")
         article_lines.append(
             f"{i}. [{a['source']}] ({pub})\n   TITLE: {a['title']}\n   DESC: {a['description']}"
@@ -220,14 +225,54 @@ def summarize_with_gemini(articles: list[dict]) -> str:
     articles_text = "\n\n".join(article_lines)
     prompt = GEMINI_PROMPT.format(articles=articles_text)
 
-    response = model.generate_content(
-        prompt,
-        generation_config=genai.GenerationConfig(
-            temperature=0.3,
-            max_output_tokens=2048,
-        ),
+    generation_config = genai.GenerationConfig(
+        temperature=0.3,
+        max_output_tokens=2048,
     )
-    return response.text.strip()
+
+    # Each model has its own independent per-minute AND daily free-tier quota.
+    # On any 429 (per-minute or per-day) or 404, immediately try the next model —
+    # cycling is faster than waiting for the same model's quota to reset.
+    models_to_try = [
+        "gemini-2.0-flash-lite",   # lightest 2.0 model — own daily quota
+        "gemini-1.5-flash",        # 1.5 flash — own daily quota
+        "gemini-2.0-flash",        # main 2.0 model — may be exhausted
+        "gemini-1.5-pro",          # 1.5 pro — lower RPM but separate daily quota
+    ]
+    last_exc: Exception = RuntimeError("No models attempted")
+
+    for model_name in models_to_try:
+        model = genai.GenerativeModel(model_name)
+        for attempt in range(3):  # up to 3 attempts per model (for transient non-quota errors)
+            try:
+                print(f"  Calling {model_name} (attempt {attempt + 1})...")
+                response = model.generate_content(prompt, generation_config=generation_config)
+                return response.text.strip()
+            except Exception as exc:
+                last_exc = exc
+                err_str = str(exc)
+                reason = str(exc).split("\n")[0][:120]
+                if "429" in err_str:
+                    # Any quota error (per-minute or per-day): immediately try next model.
+                    # Each model has its own separate quota, so skipping is always better
+                    # than waiting — the next model's quota is unaffected.
+                    quota_type = "daily" if "PerDay" in err_str else "per-minute"
+                    print(f"  {model_name} {quota_type} quota exceeded — trying next model")
+                    break
+                elif "404" in err_str:
+                    # Model not found / not supported — skip immediately, no point retrying.
+                    print(f"  {model_name} not available (404) — trying next model")
+                    break
+                elif attempt < 2:
+                    # Transient non-quota error (network blip, 503, etc.) — retry with backoff
+                    wait = 2 ** (attempt + 1)  # 2, 4 seconds
+                    print(f"  {model_name} error, retrying in {wait}s: {reason}")
+                    time.sleep(wait)
+                else:
+                    print(f"  {model_name} unavailable: {reason}")
+                    break
+
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
