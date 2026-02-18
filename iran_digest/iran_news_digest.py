@@ -13,6 +13,7 @@ import time
 import requests
 import feedparser
 import google.generativeai as genai
+from groq import Groq
 from datetime import datetime, timezone
 from typing import Optional
 from email.utils import parsedate_to_datetime
@@ -199,6 +200,67 @@ ARTICLES:
 ---
 
 Respond ONLY with the numbered digest (1 through 10). No preamble, no closing remarks."""
+
+
+def summarize_with_groq(articles: list[dict]) -> str:
+    """Use Groq (free tier) to summarize the top 10 stories.
+
+    Tries multiple open models in order. On rate-limit or model error,
+    moves immediately to the next model.
+    """
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY environment variable is not set")
+
+    client = Groq(api_key=api_key)
+
+    article_lines = []
+    for i, a in enumerate(articles[:20], 1):
+        pub = a["published"].strftime("%b %d, %H:%M UTC")
+        article_lines.append(
+            f"{i}. [{a['source']}] ({pub})\n   TITLE: {a['title']}\n   DESC: {a['description']}"
+        )
+    articles_text = "\n\n".join(article_lines)
+    prompt = GEMINI_PROMPT.format(articles=articles_text)
+
+    models_to_try = [
+        "llama-3.3-70b-versatile",   # best quality, 1,000 req/day free
+        "llama-3.1-70b-versatile",   # alternative 70B
+        "llama3-70b-8192",           # older 70B, own quota
+        "llama-3.1-8b-instant",      # small but very fast, 14,400 req/day
+    ]
+    last_exc: Exception = RuntimeError("No Groq models attempted")
+
+    for model_name in models_to_try:
+        for attempt in range(3):
+            try:
+                print(f"  Calling groq/{model_name} (attempt {attempt + 1})...")
+                completion = client.chat.completions.create(
+                    model=model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=2048,
+                )
+                return completion.choices[0].message.content.strip()
+            except Exception as exc:
+                last_exc = exc
+                err_str = str(exc)
+                reason = err_str.split("\n")[0][:120]
+                if "429" in err_str or "rate_limit" in err_str.lower():
+                    print(f"  groq/{model_name} rate limited — trying next model")
+                    break
+                elif "404" in err_str or "model_not_found" in err_str.lower():
+                    print(f"  groq/{model_name} not available — trying next model")
+                    break
+                elif attempt < 2:
+                    wait = 2 ** (attempt + 1)
+                    print(f"  groq/{model_name} error, retrying in {wait}s: {reason}")
+                    time.sleep(wait)
+                else:
+                    print(f"  groq/{model_name} unavailable: {reason}")
+                    break
+
+    raise last_exc
 
 
 def summarize_with_gemini(articles: list[dict]) -> str:
@@ -456,9 +518,19 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # 2. Summarize
-    print("\nStep 2/3 — Generating AI digest with Gemini...")
-    digest = summarize_with_gemini(articles)
+    # 2. Summarize — try Groq first (generous free tier), fall back to Gemini
+    digest: str
+    if os.environ.get("GROQ_API_KEY"):
+        try:
+            print("\nStep 2/3 — Generating AI digest with Groq...")
+            digest = summarize_with_groq(articles)
+        except Exception as groq_exc:
+            print(f"  Groq failed ({groq_exc!r}), falling back to Gemini...")
+            print("\nStep 2/3 (fallback) — Generating AI digest with Gemini...")
+            digest = summarize_with_gemini(articles)
+    else:
+        print("\nStep 2/3 — Generating AI digest with Gemini...")
+        digest = summarize_with_gemini(articles)
     print("\n--- Digest preview (first 500 chars) ---")
     print(digest[:500])
     print("...")
