@@ -234,11 +234,12 @@ def summarize_with_gemini(articles: list[dict]) -> str:
     # On any 429 (per-minute or per-day) or 404, immediately try the next model —
     # cycling is faster than waiting for the same model's quota to reset.
     models_to_try = [
-        "gemini-2.0-flash-lite",   # lightest 2.0 model — own daily quota
-        "gemini-1.5-flash",        # 1.5 flash — own daily quota
-        "gemini-2.0-flash",        # main 2.0 model — may be exhausted
-        "gemini-1.5-pro",          # 1.5 pro — lower RPM but separate daily quota
+        "gemini-2.0-flash-lite",   # lightest 2.0 — own daily quota
+        "gemini-2.0-flash",        # main 2.0 — own daily quota
+        "gemini-2.0-flash-exp",    # experimental 2.0 — separate quota pool
+        "gemini-2.0-pro-exp",      # experimental 2.0 pro — separate quota pool
     ]
+    # Note: gemini-1.5-* models return 404 in v1beta as of 2026 (deprecated)
     last_exc: Exception = RuntimeError("No models attempted")
 
     for model_name in models_to_try:
