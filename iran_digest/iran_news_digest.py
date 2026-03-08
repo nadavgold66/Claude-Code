@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """
 Iran News Digest
-Fetches Iran-related news from multiple RSS feeds, summarizes the top 10
-most important stories using Google Gemini, and sends an HTML email via Resend.
+Fetches Iran-related news from English-language Iranian RSS feeds (categorised as
+pro-regime or anti-regime), deduplicates cross-source stories, summarises via
+Groq, and sends an HTML email via Resend.
 """
 
 import os
 import sys
-import json
 import re
 import time
 import requests
 import feedparser
-import google.generativeai as genai
 from groq import Groq
 from datetime import datetime, timezone
-from typing import Optional
 from email.utils import parsedate_to_datetime
 
 
@@ -24,71 +22,102 @@ from email.utils import parsedate_to_datetime
 # ---------------------------------------------------------------------------
 
 RSS_FEEDS = [
-    # International wire / broad coverage (filtered for Iran keywords)
+    # ── PRO-REGIME: State-controlled / IRGC-linked ─────────────────────────
     {
-        "name": "Google News – Iran",
-        "url": "https://news.google.com/rss/search?q=Iran&hl=en-US&gl=US&ceid=US:en",
-        "iran_only": False,   # already filtered by Google
-    },
-    {
-        "name": "Google News – Iran Politics",
-        "url": "https://news.google.com/rss/search?q=Iran+politics+geopolitics&hl=en-US&gl=US&ceid=US:en",
-        "iran_only": False,
-    },
-    {
-        "name": "Google News – Iran Nuclear",
-        "url": "https://news.google.com/rss/search?q=Iran+nuclear+sanctions&hl=en-US&gl=US&ceid=US:en",
-        "iran_only": False,
-    },
-    {
-        "name": "Reuters – World News",
-        "url": "https://feeds.reuters.com/reuters/worldNews",
-        "iran_only": True,   # filter for Iran keywords
-    },
-    {
-        "name": "Al Jazeera – All",
-        "url": "https://www.aljazeera.com/xml/rss/all.xml",
-        "iran_only": True,
-    },
-    {
-        "name": "BBC – World",
-        "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
-        "iran_only": True,
-    },
-    # Iran-focused / regional outlets
-    {
-        "name": "Iran International",
-        "url": "https://www.iranintl.com/en/rss",
-        "iran_only": False,
-    },
-    {
-        "name": "Radio Farda (RFE/RL)",
-        "url": "https://www.radiofarda.com/api/zmpbjqimiv",
-        "iran_only": False,
-    },
-    {
-        "name": "IRNA – English",
+        "name": "IRNA",
         "url": "https://en.irna.ir/rss",
         "iran_only": False,
+        "bias": "pro-regime",
+        "description": "Islamic Republic News Agency (official state wire)",
+    },
+    {
+        "name": "Press TV",
+        "url": "https://www.presstv.ir/rss.xml",
+        "iran_only": False,
+        "bias": "pro-regime",
+        "description": "IRIB-owned English-language state broadcaster",
+    },
+    {
+        "name": "Tasnim News",
+        "url": "https://www.tasnimnews.com/en/rss",
+        "iran_only": False,
+        "bias": "pro-regime",
+        "description": "IRGC-linked news agency",
+    },
+    {
+        "name": "Mehr News",
+        "url": "https://en.mehrnews.com/rss",
+        "iran_only": False,
+        "bias": "pro-regime",
+        "description": "Government-sponsored (Islamic Development Org.)",
     },
     {
         "name": "Tehran Times",
         "url": "https://www.tehrantimes.com/rss",
         "iran_only": False,
+        "bias": "pro-regime",
+        "description": "State-controlled English-language daily",
     },
     {
-        "name": "Mehr News Agency",
-        "url": "https://en.mehrnews.com/rss",
+        "name": "Kayhan International",
+        "url": "https://kayhan.ir/en/rss/allnews",
         "iran_only": False,
+        "bias": "pro-regime",
+        "description": "Hardline daily; publisher appointed by Supreme Leader",
     },
     {
-        "name": "Press TV",
-        "url": "https://www.presstv.ir/rss",
+        "name": "Iran Daily",
+        "url": "https://irandaily.ir/News/Feed2",
         "iran_only": False,
+        "bias": "pro-regime",
+        "description": "Government-controlled English daily",
+    },
+    {
+        "name": "ISNA",
+        "url": "https://en.isna.ir/rss",
+        "iran_only": False,
+        "bias": "pro-regime",
+        "description": "Iranian Students' News Agency (state-affiliated)",
+    },
+    # ── ANTI-REGIME: Opposition / Exile / Independent ───────────────────────
+    {
+        "name": "Iran International",
+        "url": "https://www.iranintl.com/en/rss",
+        "iran_only": False,
+        "bias": "anti-regime",
+        "description": "London-based opposition satellite channel",
+    },
+    {
+        "name": "Radio Farda",
+        "url": "https://www.radiofarda.com/api/zmpbjqimiv",
+        "iran_only": False,
+        "bias": "anti-regime",
+        "description": "RFE/RL Persian Service (US-funded independent journalism)",
+    },
+    {
+        "name": "IranWire",
+        "url": "https://iranwire.com/en/feed/",
+        "iran_only": False,
+        "bias": "anti-regime",
+        "description": "Investigative platform combining diaspora & citizen journalists",
+    },
+    {
+        "name": "Zamaneh Media",
+        "url": "https://en.radiozamaneh.com/feed",
+        "iran_only": False,
+        "bias": "anti-regime",
+        "description": "Amsterdam-based independent exile media (human rights focus)",
+    },
+    {
+        "name": "CHRI",
+        "url": "https://iranhumanrights.org/feed/",
+        "iran_only": False,
+        "bias": "anti-regime",
+        "description": "Center for Human Rights in Iran (independent NGO)",
     },
 ]
 
-# Keywords used to filter non-Iran-specific feeds
+# Keywords used when iran_only=True to filter non-Iran-specific feeds
 IRAN_KEYWORDS = {
     "iran", "iranian", "tehran", "khamenei", "khomeini", "raisi", "pezeshkian",
     "irgc", "islamic republic", "rouhani", "zarif", "araghchi",
@@ -103,13 +132,11 @@ IRAN_KEYWORDS = {
 # ---------------------------------------------------------------------------
 
 def _is_iran_related(title: str, description: str) -> bool:
-    """Return True if the text appears to be about Iran."""
     combined = (title + " " + description).lower()
     return any(kw in combined for kw in IRAN_KEYWORDS)
 
 
 def _parse_date(entry) -> datetime:
-    """Extract a timezone-aware datetime from a feedparser entry."""
     for field in ("published", "updated"):
         raw = entry.get(field)
         if raw:
@@ -121,7 +148,7 @@ def _parse_date(entry) -> datetime:
 
 
 def fetch_articles() -> list[dict]:
-    """Fetch and deduplicate Iran-related articles from all RSS feeds."""
+    """Fetch and URL-deduplicate articles from all RSS feeds, retaining bias label."""
     articles: list[dict] = []
     seen_urls: set[str] = set()
 
@@ -129,17 +156,15 @@ def fetch_articles() -> list[dict]:
         name = feed_info["name"]
         url = feed_info["url"]
         iran_only = feed_info["iran_only"]
+        bias = feed_info["bias"]
 
         try:
             feed = feedparser.parse(url, request_headers={"User-Agent": "IranNewsDigest/1.0"})
             count = 0
             for entry in feed.entries[:20]:
                 title = entry.get("title", "").strip()
-                description = (
-                    entry.get("summary", entry.get("description", "")).strip()
-                )
-                # Strip HTML tags from description
-                description = re.sub(r"<[^>]+>", "", description)[:200]
+                description = entry.get("summary", entry.get("description", "")).strip()
+                description = re.sub(r"<[^>]+>", "", description)[:250]
                 link = entry.get("link", "").strip()
 
                 if not title or not link:
@@ -150,47 +175,61 @@ def fetch_articles() -> list[dict]:
                     continue
 
                 seen_urls.add(link)
-                articles.append(
-                    {
-                        "source": name,
-                        "title": title,
-                        "description": description,
-                        "url": link,
-                        "published": _parse_date(entry),
-                    }
-                )
+                articles.append({
+                    "source": name,
+                    "bias": bias,
+                    "title": title,
+                    "description": description,
+                    "url": link,
+                    "published": _parse_date(entry),
+                })
                 count += 1
 
-            print(f"  [{name}] {count} articles")
+            print(f"  [{bias:12s}] {name}: {count} articles")
         except Exception as exc:
-            print(f"  [{name}] ERROR: {exc}", file=sys.stderr)
+            print(f"  [ERROR] {name}: {exc}", file=sys.stderr)
 
-    # Sort newest first
     articles.sort(key=lambda a: a["published"], reverse=True)
-    print(f"\nTotal unique Iran-related articles: {len(articles)}")
+    pro_count = sum(1 for a in articles if a["bias"] == "pro-regime")
+    anti_count = sum(1 for a in articles if a["bias"] == "anti-regime")
+    print(f"\nTotal unique articles: {len(articles)} "
+          f"(pro-regime: {pro_count}, anti-regime: {anti_count})")
     return articles
 
 
 # ---------------------------------------------------------------------------
-# AI Summarization (Google Gemini)
+# AI Summarization (Groq)
 # ---------------------------------------------------------------------------
+
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 GEMINI_PROMPT = """You are a senior analyst specializing in Iranian affairs.
 
-Below is a batch of recent news articles about Iran gathered from multiple international
-and Iranian media outlets. Your job is to produce a **Top 10 Iran News Digest**.
+Below are recent news articles from two sets of sources:
+  [PRO-REGIME] — Iranian state media and IRGC-linked outlets
+  [ANTI-REGIME] — Opposition, exile, and independent media
 
-**Focus areas:** domestic politics, geopolitics, nuclear program/JCPOA,
-economy & sanctions, military/IRGC, protests/human rights, regional proxy activity,
-and international diplomacy.
+Your task: produce a **Top 10 Iran News Digest** that surfaces the most important stories.
 
-**For each item provide:**
-1. A clear, punchy headline (one line)
-2. A 3-4 sentence explanation: what happened, key actors involved, and why it matters
-3. A significance tag: 🔴 High | 🟡 Medium
+## Rules
+1. **Deduplicate**: If multiple sources (from the same or different camps) report the same event,
+   merge them into ONE story item. List ALL source names that covered it under "Sources:".
+2. **Dual perspectives**: If both camps covered the same event, briefly note how each side
+   framed it (1 sentence each) under "Pro-regime angle:" and "Anti-regime angle:".
+   If only one camp covered a story, omit the other angle line entirely.
+3. **Rank** from most to least significant (domestic politics, nuclear/JCPOA, geopolitics,
+   economy & sanctions, military/IRGC, protests/human rights, regional proxies, diplomacy).
+4. **Significance tag**: 🔴 High | 🟡 Medium (one per story, on the headline line).
+5. Keep each summary to 3-4 sentences max.
+6. Respond ONLY with the numbered list (1-10). No preamble or closing remarks.
 
-Rank them from most to least significant. Use clear, neutral language.
-Do NOT repeat the same event twice. Consolidate duplicate stories.
+## Required output format (repeat exactly for each story):
+
+N. 🔴 [HEADLINE]
+Summary: [3-4 sentences on what happened, key actors, why it matters]
+Pro-regime angle: [How pro-regime sources framed it — omit line if not covered by them]
+Anti-regime angle: [How anti-regime sources framed it — omit line if not covered by them]
+Sources: [Comma-separated list of all outlet names that reported this]
 
 At the end of each item, on its own line, write: SOURCE: [N]
 where N is the number of the single article from the ARTICLES list below that best
@@ -198,15 +237,16 @@ supports that story. Use only one number. Do not omit the SOURCE line.
 
 ---
 
-ARTICLES:
-{articles}
+## ARTICLES
 
----
-
-Respond ONLY with the numbered digest (1 through 10). No preamble, no closing remarks."""
+{articles}"""
 
 
 def summarize_with_groq(articles: list[dict]) -> str:
+<<<<<<< HEAD
+    """Call Groq with the dual-perspective prompt."""
+    api_key = os.environ.get("GROQ_API_KEY")
+=======
     """Use Groq (free tier) to summarize the top 10 stories.
 
     Tries multiple open models in order. On rate-limit or model error,
@@ -275,22 +315,52 @@ def summarize_with_gemini(articles: list[dict]) -> str:
     On per-minute 429 retries with exponential backoff.
     """
     api_key = os.environ.get("GEMINI_API_KEY")
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
     if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is not set")
+        raise ValueError("GROQ_API_KEY environment variable is not set")
 
-    genai.configure(api_key=api_key)
+    client = Groq(api_key=api_key)
 
-    # Build article text (cap at 20 articles to stay within free-tier token limits)
+    # Build article text — balanced 15 pro + 15 anti, sorted by date within each group
+    pro = [a for a in articles if a["bias"] == "pro-regime"][:15]
+    anti = [a for a in articles if a["bias"] == "anti-regime"][:15]
+    balanced = sorted(pro + anti, key=lambda a: a["published"], reverse=True)
+
     article_lines = []
-    for i, a in enumerate(articles[:20], 1):
+    for i, a in enumerate(balanced, 1):
         pub = a["published"].strftime("%b %d, %H:%M UTC")
+        bias_tag = "[PRO-REGIME]" if a["bias"] == "pro-regime" else "[ANTI-REGIME]"
         article_lines.append(
-            f"{i}. [{a['source']}] ({pub})\n   TITLE: {a['title']}\n   DESC: {a['description']}"
+            f"{i}. {bias_tag} {a['source']} ({pub})\n"
+            f"   TITLE: {a['title']}\n"
+            f"   DESC:  {a['description']}"
         )
 
     articles_text = "\n\n".join(article_lines)
     prompt = GEMINI_PROMPT.format(articles=articles_text)
 
+<<<<<<< HEAD
+    last_exc: Exception = RuntimeError("No models attempted")
+    for attempt in range(3):
+        try:
+            print(f"  Calling {GROQ_MODEL} (attempt {attempt + 1})...")
+            response = client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=2048,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as exc:
+            last_exc = exc
+            reason = str(exc).split("\n")[0][:120]
+            if attempt < 2:
+                wait = 2 ** (attempt + 1)
+                print(f"  Error, retrying in {wait}s: {reason}")
+                time.sleep(wait)
+            else:
+                print(f"  Failed: {reason}")
+=======
     generation_config = genai.GenerationConfig(
         temperature=0.3,
         max_output_tokens=2048,
@@ -338,36 +408,63 @@ def summarize_with_gemini(articles: list[dict]) -> str:
                 else:
                     print(f"  {model_name} unavailable: {reason}")
                     break
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
 
     raise last_exc
 
 
 # ---------------------------------------------------------------------------
-# Email (Resend)
+# Email rendering
 # ---------------------------------------------------------------------------
 
+<<<<<<< HEAD
+_PRO_REGIME_SOURCES  = {f["name"] for f in RSS_FEEDS if f["bias"] == "pro-regime"}
+_ANTI_REGIME_SOURCES = {f["name"] for f in RSS_FEEDS if f["bias"] == "anti-regime"}
+=======
 def _digest_to_html(digest: str, articles: list[dict]) -> str:
     """Convert the plain-text numbered digest to styled HTML blocks."""
     blocks = []
     # Split on numbered items like "1." or "1 " at start of line
     items = re.split(r"\n(?=\d{1,2}[\.\)])", digest.strip())
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
 
-    for item in items:
-        item = item.strip()
-        if not item:
+
+def _parse_digest(digest: str) -> list[dict]:
+    """
+    Parse Gemini output into a list of story dicts:
+      headline, significance, summary, pro_angle, anti_angle, sources
+    """
+    stories = []
+    blocks = re.split(r"\n(?=\d{1,2}[\.\)])", digest.strip())
+
+    for block in blocks:
+        block = block.strip()
+        if not block:
             continue
 
-        # Detect significance tag
-        if "🔴" in item:
-            border = "#c0392b"
-            badge = '<span style="background:#c0392b;color:white;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:bold;">HIGH</span>'
-        elif "🟡" in item:
-            border = "#f39c12"
-            badge = '<span style="background:#f39c12;color:white;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:bold;">MEDIUM</span>'
-        else:
-            border = "#7f8c8d"
-            badge = ""
+        story: dict = {
+            "headline": "",
+            "significance": "medium",
+            "summary": "",
+            "pro_angle": "",
+            "anti_angle": "",
+            "sources": [],
+        }
 
+<<<<<<< HEAD
+        lines = block.split("\n")
+
+        # First line: "N. 🔴 HEADLINE"
+        first = lines[0].strip()
+        if "🔴" in first:
+            story["significance"] = "high"
+            first = first.replace("🔴", "").strip()
+        elif "🟡" in first:
+            story["significance"] = "medium"
+            first = first.replace("🟡", "").strip()
+        first = re.sub(r"^\d{1,2}[\.\)]\s*", "", first).strip()
+        story["headline"] = first
+=======
         # Extract SOURCE: [N] reference and remove it from the displayed text
         source_link_html = ""
         source_match = re.search(r"SOURCE:\s*\[?(\d+)\]?", item, re.IGNORECASE)
@@ -392,35 +489,136 @@ def _digest_to_html(digest: str, articles: list[dict]) -> str:
         # Clean significance tags from body text
         body = body.replace("🔴 High", "").replace("🟡 Medium", "").strip()
         body = re.sub(r"Significance:\s*", "", body).strip()
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
 
-        blocks.append(
-            f"""<div style="border-left:4px solid {border};padding:14px 18px;
+        for line in lines[1:]:
+            line = line.strip()
+            low = line.lower()
+            if low.startswith("summary:"):
+                story["summary"] = line[len("summary:"):].strip()
+            elif low.startswith("pro-regime angle:"):
+                story["pro_angle"] = line[len("pro-regime angle:"):].strip()
+            elif low.startswith("anti-regime angle:"):
+                story["anti_angle"] = line[len("anti-regime angle:"):].strip()
+            elif low.startswith("sources:"):
+                raw = line[len("sources:"):].strip()
+                story["sources"] = [s.strip() for s in raw.split(",") if s.strip()]
+            elif story["summary"] and not re.match(
+                r"^(pro-regime|anti-regime|sources)", low
+            ):
+                story["summary"] += " " + line
+
+        if story["headline"]:
+            # Only keep an angle if the corresponding camp actually appears in Sources.
+            # This prevents the AI from hallucinating angles for stories it had no data on.
+            src_set = set(story["sources"])
+            if not (src_set & _PRO_REGIME_SOURCES):
+                story["pro_angle"] = ""
+            if not (src_set & _ANTI_REGIME_SOURCES):
+                story["anti_angle"] = ""
+            stories.append(story)
+
+    return stories
+
+
+def _story_to_html(story: dict) -> str:
+    sig = story["significance"]
+    if sig == "high":
+        border = "#c0392b"
+        badge = ('<span style="background:#c0392b;color:#fff;padding:2px 9px;'
+                 'border-radius:12px;font-size:11px;font-weight:bold;'
+                 'letter-spacing:.5px;">HIGH</span>')
+    else:
+        border = "#e67e22"
+        badge = ('<span style="background:#e67e22;color:#fff;padding:2px 9px;'
+                 'border-radius:12px;font-size:11px;font-weight:bold;'
+                 'letter-spacing:.5px;">MEDIUM</span>')
+
+    pro = (f'<p style="margin:8px 0 0;font-size:13px;color:#555;line-height:1.55;">'
+           f'<strong style="color:#8b0000;">🔵 Pro-regime:</strong> {story["pro_angle"]}</p>'
+           if story["pro_angle"] else "")
+
+    anti = (f'<p style="margin:6px 0 0;font-size:13px;color:#555;line-height:1.55;">'
+            f'<strong style="color:#1a5276;">🟢 Anti-regime:</strong> {story["anti_angle"]}</p>'
+            if story["anti_angle"] else "")
+
+    sources_txt = ""
+    if story["sources"]:
+        src_list = ", ".join(f"<em>{s}</em>" for s in story["sources"])
+        sources_txt = (f'<p style="margin:8px 0 0;font-size:11px;color:#888;">'
+                       f'Sources: {src_list}</p>')
+
+    dual_bar = ""
+    if story["pro_angle"] and story["anti_angle"]:
+        dual_bar = ('<p style="margin:8px 0 0;font-size:11px;color:#6c3483;font-weight:bold;">'
+                    '⚡ Covered by both sides</p>')
+
+    return f"""<div style="border-left:4px solid {border};padding:14px 18px;
                            margin-bottom:18px;background:#fafafa;border-radius:0 6px 6px 0;">
+<<<<<<< HEAD
+  <p style="margin:0 0 6px;font-size:16px;font-weight:700;color:#1a1a2e;">
+    {story['headline']} &nbsp;{badge}
+  </p>
+  <p style="margin:0;font-size:14px;color:#444;line-height:1.6;">{story['summary']}</p>
+  {dual_bar}
+  {pro}
+  {anti}
+  {sources_txt}
+</div>"""
+
+
+def _build_source_table() -> str:
+    pro_sources = [f for f in RSS_FEEDS if f["bias"] == "pro-regime"]
+    anti_sources = [f for f in RSS_FEEDS if f["bias"] == "anti-regime"]
+
+    def rows(sources):
+        return "".join(
+            f'<tr><td style="padding:3px 8px 3px 0;font-size:12px;color:#444;'
+            f'font-weight:bold;white-space:nowrap;">{s["name"]}</td>'
+            f'<td style="padding:3px 0;font-size:12px;color:#666;">{s["description"]}</td></tr>'
+            for s in sources
+=======
               <p style="margin:0 0 6px;font-size:16px;font-weight:700;color:#1a1a2e;">{headline} {badge}</p>
               <p style="margin:0;font-size:14px;color:#444;line-height:1.6;">{body}{source_link_html}</p>
             </div>"""
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
         )
 
-    return "\n".join(blocks)
+    return f"""<table width="100%" cellpadding="0" cellspacing="0">
+  <tr>
+    <td width="48%" valign="top">
+      <p style="margin:0 0 8px;font-size:12px;font-weight:bold;color:#8b0000;
+                text-transform:uppercase;letter-spacing:.5px;">🔵 Pro-Regime</p>
+      <table cellpadding="0" cellspacing="0">{rows(pro_sources)}</table>
+    </td>
+    <td width="4%"></td>
+    <td width="48%" valign="top">
+      <p style="margin:0 0 8px;font-size:12px;font-weight:bold;color:#1a5276;
+                text-transform:uppercase;letter-spacing:.5px;">🟢 Anti-Regime</p>
+      <table cellpadding="0" cellspacing="0">{rows(anti_sources)}</table>
+    </td>
+  </tr>
+</table>"""
 
 
-def build_html_email(digest: str, articles: list[dict], run_time: datetime) -> str:
-    """Assemble the full HTML email."""
+def build_html_email(digest: str, run_time: datetime) -> str:
     time_str = run_time.strftime("%A, %B %d, %Y — %H:%M UTC")
     slot = "Morning" if run_time.hour < 14 else "Evening"
+<<<<<<< HEAD
+=======
     digest_html = _digest_to_html(digest, articles)
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
 
-    # Source list (first 20 unique sources with their article titles as links)
-    seen_sources: set[str] = set()
-    source_links = []
-    for a in articles[:30]:
-        if a["source"] not in seen_sources:
-            seen_sources.add(a["source"])
-            source_links.append(
-                f'<li style="margin-bottom:4px;"><strong>{a["source"]}</strong></li>'
-            )
+    stories = _parse_digest(digest)
+    stories_html = "\n".join(_story_to_html(s) for s in stories) if stories else (
+        f'<pre style="font-size:13px;color:#444;">{digest}</pre>'
+    )
 
-    sources_html = "\n".join(source_links)
+    sources_table = _build_source_table()
+
+    dual_count = sum(1 for s in stories if s["pro_angle"] and s["anti_angle"])
+    stats = (f"{len(stories)} stories"
+             + (f" &nbsp;·&nbsp; {dual_count} cross-perspective" if dual_count else ""))
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -444,30 +642,43 @@ def build_html_email(digest: str, articles: list[dict], run_time: datetime) -> s
             {slot} Edition &nbsp;·&nbsp; {time_str}
           </p>
           <p style="margin:6px 0 0;color:#7a8898;font-size:12px;">
-            AI-powered summary of the top 10 Iran stories
+            {stats} &nbsp;·&nbsp; Deduped &amp; cross-referenced from pro- and anti-regime sources
           </p>
         </td></tr>
 
-        <!-- Body -->
-        <tr><td style="background:#ffffff;padding:32px 40px;">
-          {digest_html}
+        <!-- Legend -->
+        <tr><td style="background:#f8f4ee;padding:12px 40px;border-bottom:1px solid #e8e0d0;">
+          <p style="margin:0;font-size:12px;color:#666;text-align:center;">
+            <strong style="color:#8b0000;">🔵 Pro-regime angle</strong>
+            &nbsp;|&nbsp;
+            <strong style="color:#1a5276;">🟢 Anti-regime angle</strong>
+            &nbsp;|&nbsp;
+            <strong style="color:#6c3483;">⚡ Both sides reported this story</strong>
+          </p>
         </td></tr>
 
-        <!-- Sources -->
+        <!-- Stories -->
+        <tr><td style="background:#ffffff;padding:32px 40px;">
+          {stories_html}
+        </td></tr>
+
+        <!-- Sources monitored -->
         <tr><td style="background:#f8f8f5;padding:24px 40px;border-top:1px solid #e8e8e0;">
-          <h3 style="margin:0 0 12px;color:#1a1a2e;font-size:14px;text-transform:uppercase;
+          <h3 style="margin:0 0 14px;color:#1a1a2e;font-size:13px;text-transform:uppercase;
                      letter-spacing:1px;">Sources Monitored</h3>
-          <ul style="margin:0;padding-left:18px;color:#666;font-size:13px;columns:2;
-                     column-gap:20px;list-style:disc;">
-            {sources_html}
-          </ul>
+          {sources_table}
         </td></tr>
 
         <!-- Footer -->
         <tr><td style="background:#1a1a2e;padding:20px 40px;border-radius:0 0 10px 10px;
                         text-align:center;">
           <p style="margin:0;color:#7a8898;font-size:11px;">
+<<<<<<< HEAD
+            Automated digest &nbsp;·&nbsp; Powered by Groq &nbsp;·&nbsp;
+            Delivered via Resend
+=======
             Automated digest · Powered by Groq (Llama 3.3) · Delivered via Resend
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
           </p>
         </td></tr>
 
@@ -478,8 +689,11 @@ def build_html_email(digest: str, articles: list[dict], run_time: datetime) -> s
 </html>"""
 
 
+# ---------------------------------------------------------------------------
+# Email sending (Resend)
+# ---------------------------------------------------------------------------
+
 def send_email(html: str, run_time: datetime) -> None:
-    """Send the HTML email via Resend API."""
     api_key = os.environ.get("RESEND_API_KEY")
     recipient = os.environ.get("RECIPIENT_EMAIL")
     sender = os.environ.get("SENDER_EMAIL", "onboarding@resend.dev")
@@ -512,9 +726,7 @@ def send_email(html: str, run_time: datetime) -> None:
         data = response.json()
         print(f"Email sent successfully. ID: {data.get('id', 'unknown')}")
     else:
-        raise RuntimeError(
-            f"Resend API error {response.status_code}: {response.text}"
-        )
+        raise RuntimeError(f"Resend API error {response.status_code}: {response.text}")
 
 
 # ---------------------------------------------------------------------------
@@ -525,17 +737,20 @@ def main() -> None:
     run_time = datetime.now(timezone.utc)
     print(f"=== Iran News Digest — {run_time.strftime('%Y-%m-%d %H:%M UTC')} ===\n")
 
-    # 1. Fetch articles
     print("Step 1/3 — Fetching articles from RSS feeds...")
     articles = fetch_articles()
 
     if len(articles) < 5:
-        print(
-            f"Only {len(articles)} articles found (need at least 5). Aborting.",
-            file=sys.stderr,
-        )
+        print(f"Only {len(articles)} articles found (need >= 5). Aborting.", file=sys.stderr)
         sys.exit(1)
 
+<<<<<<< HEAD
+    print("\nStep 2/3 — Generating AI digest with Groq...")
+    digest = summarize_with_groq(articles)
+    print("\n--- Digest preview (first 600 chars) ---")
+    print(digest[:600])
+    print("...\n")
+=======
     # 2. Summarize — try Groq first (generous free tier), fall back to Gemini
     digest: str
     if os.environ.get("GROQ_API_KEY"):
@@ -552,10 +767,10 @@ def main() -> None:
     print("\n--- Digest preview (first 500 chars) ---")
     print(digest[:500])
     print("...")
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
 
-    # 3. Send email
-    print("\nStep 3/3 — Sending email via Resend...")
-    html = build_html_email(digest, articles, run_time)
+    print("Step 3/3 — Sending email via Resend...")
+    html = build_html_email(digest, run_time)
     send_email(html, run_time)
 
     print("\n=== Done ===")
