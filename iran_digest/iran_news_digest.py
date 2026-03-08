@@ -292,16 +292,8 @@ def summarize_with_groq(articles: list[dict]) -> str:
 # Email rendering
 # ---------------------------------------------------------------------------
 
-_NEGATIVE_ANGLE_PHRASES = (
-    "not covered", "no coverage", "did not cover", "did not report",
-    "not reported", "not mentioned", "not addressed", "no anti-regime",
-    "no pro-regime", "not available", "n/a",
-)
-
-def _is_real_angle(text: str) -> bool:
-    """Return False if the AI wrote a 'not covered' placeholder instead of real content."""
-    low = text.lower()
-    return bool(text) and not any(p in low for p in _NEGATIVE_ANGLE_PHRASES)
+_PRO_REGIME_SOURCES  = {f["name"] for f in RSS_FEEDS if f["bias"] == "pro-regime"}
+_ANTI_REGIME_SOURCES = {f["name"] for f in RSS_FEEDS if f["bias"] == "anti-regime"}
 
 
 def _parse_digest(digest: str) -> list[dict]:
@@ -345,11 +337,9 @@ def _parse_digest(digest: str) -> list[dict]:
             if low.startswith("summary:"):
                 story["summary"] = line[len("summary:"):].strip()
             elif low.startswith("pro-regime angle:"):
-                val = line[len("pro-regime angle:"):].strip()
-                story["pro_angle"] = val if _is_real_angle(val) else ""
+                story["pro_angle"] = line[len("pro-regime angle:"):].strip()
             elif low.startswith("anti-regime angle:"):
-                val = line[len("anti-regime angle:"):].strip()
-                story["anti_angle"] = val if _is_real_angle(val) else ""
+                story["anti_angle"] = line[len("anti-regime angle:"):].strip()
             elif low.startswith("sources:"):
                 raw = line[len("sources:"):].strip()
                 story["sources"] = [s.strip() for s in raw.split(",") if s.strip()]
@@ -359,6 +349,13 @@ def _parse_digest(digest: str) -> list[dict]:
                 story["summary"] += " " + line
 
         if story["headline"]:
+            # Only keep an angle if the corresponding camp actually appears in Sources.
+            # This prevents the AI from hallucinating angles for stories it had no data on.
+            src_set = set(story["sources"])
+            if not (src_set & _PRO_REGIME_SOURCES):
+                story["pro_angle"] = ""
+            if not (src_set & _ANTI_REGIME_SOURCES):
+                story["anti_angle"] = ""
             stories.append(story)
 
     return stories
