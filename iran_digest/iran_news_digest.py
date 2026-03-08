@@ -231,6 +231,10 @@ Pro-regime angle: [How pro-regime sources framed it — omit line if not covered
 Anti-regime angle: [How anti-regime sources framed it — omit line if not covered by them]
 Sources: [Comma-separated list of all outlet names that reported this]
 
+At the end of each item, on its own line, write: SOURCE: [N]
+where N is the number of the single article from the ARTICLES list below that best
+supports that story. Use only one number. Do not omit the SOURCE line.
+
 ---
 
 ## ARTICLES
@@ -239,8 +243,79 @@ Sources: [Comma-separated list of all outlet names that reported this]
 
 
 def summarize_with_groq(articles: list[dict]) -> str:
+<<<<<<< HEAD
     """Call Groq with the dual-perspective prompt."""
     api_key = os.environ.get("GROQ_API_KEY")
+=======
+    """Use Groq (free tier) to summarize the top 10 stories.
+
+    Tries multiple open models in order. On rate-limit or model error,
+    moves immediately to the next model.
+    """
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY environment variable is not set")
+
+    client = Groq(api_key=api_key)
+
+    article_lines = []
+    for i, a in enumerate(articles[:20], 1):
+        pub = a["published"].strftime("%b %d, %H:%M UTC")
+        article_lines.append(
+            f"{i}. [{a['source']}] ({pub})\n   TITLE: {a['title']}\n   DESC: {a['description']}"
+        )
+    articles_text = "\n\n".join(article_lines)
+    prompt = GEMINI_PROMPT.format(articles=articles_text)
+
+    models_to_try = [
+        "llama-3.3-70b-versatile",   # best quality, 1,000 req/day free
+        "llama-3.1-70b-versatile",   # alternative 70B
+        "llama3-70b-8192",           # older 70B, own quota
+        "llama-3.1-8b-instant",      # small but very fast, 14,400 req/day
+    ]
+    last_exc: Exception = RuntimeError("No Groq models attempted")
+
+    for model_name in models_to_try:
+        for attempt in range(3):
+            try:
+                print(f"  Calling groq/{model_name} (attempt {attempt + 1})...")
+                completion = client.chat.completions.create(
+                    model=model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=2048,
+                )
+                return completion.choices[0].message.content.strip()
+            except Exception as exc:
+                last_exc = exc
+                err_str = str(exc)
+                reason = err_str.split("\n")[0][:120]
+                if "429" in err_str or "rate_limit" in err_str.lower():
+                    print(f"  groq/{model_name} rate limited — trying next model")
+                    break
+                elif "404" in err_str or "model_not_found" in err_str.lower():
+                    print(f"  groq/{model_name} not available — trying next model")
+                    break
+                elif attempt < 2:
+                    wait = 2 ** (attempt + 1)
+                    print(f"  groq/{model_name} error, retrying in {wait}s: {reason}")
+                    time.sleep(wait)
+                else:
+                    print(f"  groq/{model_name} unavailable: {reason}")
+                    break
+
+    raise last_exc
+
+
+def summarize_with_gemini(articles: list[dict]) -> str:
+    """Use Gemini to summarize the top 10 stories.
+
+    Tries multiple models in order (each has its own independent quota).
+    On 404 or daily-quota exhaustion moves immediately to the next model.
+    On per-minute 429 retries with exponential backoff.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
     if not api_key:
         raise ValueError("GROQ_API_KEY environment variable is not set")
 
@@ -264,6 +339,7 @@ def summarize_with_groq(articles: list[dict]) -> str:
     articles_text = "\n\n".join(article_lines)
     prompt = GEMINI_PROMPT.format(articles=articles_text)
 
+<<<<<<< HEAD
     last_exc: Exception = RuntimeError("No models attempted")
     for attempt in range(3):
         try:
@@ -284,6 +360,55 @@ def summarize_with_groq(articles: list[dict]) -> str:
                 time.sleep(wait)
             else:
                 print(f"  Failed: {reason}")
+=======
+    generation_config = genai.GenerationConfig(
+        temperature=0.3,
+        max_output_tokens=2048,
+    )
+
+    # Each model has its own independent per-minute AND daily free-tier quota.
+    # On any 429 (per-minute or per-day) or 404, immediately try the next model —
+    # cycling is faster than waiting for the same model's quota to reset.
+    models_to_try = [
+        "gemini-2.0-flash-lite",   # lightest 2.0 — own daily quota
+        "gemini-2.0-flash",        # main 2.0 — own daily quota
+        "gemini-2.0-flash-exp",    # experimental 2.0 — separate quota pool
+        "gemini-2.0-pro-exp",      # experimental 2.0 pro — separate quota pool
+    ]
+    # Note: gemini-1.5-* models return 404 in v1beta as of 2026 (deprecated)
+    last_exc: Exception = RuntimeError("No models attempted")
+
+    for model_name in models_to_try:
+        model = genai.GenerativeModel(model_name)
+        for attempt in range(3):  # up to 3 attempts per model (for transient non-quota errors)
+            try:
+                print(f"  Calling {model_name} (attempt {attempt + 1})...")
+                response = model.generate_content(prompt, generation_config=generation_config)
+                return response.text.strip()
+            except Exception as exc:
+                last_exc = exc
+                err_str = str(exc)
+                reason = str(exc).split("\n")[0][:120]
+                if "429" in err_str:
+                    # Any quota error (per-minute or per-day): immediately try next model.
+                    # Each model has its own separate quota, so skipping is always better
+                    # than waiting — the next model's quota is unaffected.
+                    quota_type = "daily" if "PerDay" in err_str else "per-minute"
+                    print(f"  {model_name} {quota_type} quota exceeded — trying next model")
+                    break
+                elif "404" in err_str:
+                    # Model not found / not supported — skip immediately, no point retrying.
+                    print(f"  {model_name} not available (404) — trying next model")
+                    break
+                elif attempt < 2:
+                    # Transient non-quota error (network blip, 503, etc.) — retry with backoff
+                    wait = 2 ** (attempt + 1)  # 2, 4 seconds
+                    print(f"  {model_name} error, retrying in {wait}s: {reason}")
+                    time.sleep(wait)
+                else:
+                    print(f"  {model_name} unavailable: {reason}")
+                    break
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
 
     raise last_exc
 
@@ -292,8 +417,16 @@ def summarize_with_groq(articles: list[dict]) -> str:
 # Email rendering
 # ---------------------------------------------------------------------------
 
+<<<<<<< HEAD
 _PRO_REGIME_SOURCES  = {f["name"] for f in RSS_FEEDS if f["bias"] == "pro-regime"}
 _ANTI_REGIME_SOURCES = {f["name"] for f in RSS_FEEDS if f["bias"] == "anti-regime"}
+=======
+def _digest_to_html(digest: str, articles: list[dict]) -> str:
+    """Convert the plain-text numbered digest to styled HTML blocks."""
+    blocks = []
+    # Split on numbered items like "1." or "1 " at start of line
+    items = re.split(r"\n(?=\d{1,2}[\.\)])", digest.strip())
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
 
 
 def _parse_digest(digest: str) -> list[dict]:
@@ -318,6 +451,7 @@ def _parse_digest(digest: str) -> list[dict]:
             "sources": [],
         }
 
+<<<<<<< HEAD
         lines = block.split("\n")
 
         # First line: "N. 🔴 HEADLINE"
@@ -330,6 +464,32 @@ def _parse_digest(digest: str) -> list[dict]:
             first = first.replace("🟡", "").strip()
         first = re.sub(r"^\d{1,2}[\.\)]\s*", "", first).strip()
         story["headline"] = first
+=======
+        # Extract SOURCE: [N] reference and remove it from the displayed text
+        source_link_html = ""
+        source_match = re.search(r"SOURCE:\s*\[?(\d+)\]?", item, re.IGNORECASE)
+        if source_match:
+            article_idx = int(source_match.group(1)) - 1
+            if 0 <= article_idx < len(articles):
+                url = articles[article_idx]["url"]
+                src_name = articles[article_idx]["source"]
+                source_link_html = (
+                    f' <a href="{url}" style="color:#0f3460;font-size:12px;'
+                    f'text-decoration:none;white-space:nowrap;">Read more → ({src_name})</a>'
+                )
+            item = re.sub(r"\n?SOURCE:\s*\[?\d+\]?", "", item, flags=re.IGNORECASE).strip()
+
+        # Bold first line (headline), rest is body
+        lines = item.split("\n", 2)
+        headline = lines[0].strip()
+        body = lines[1].strip() if len(lines) > 1 else ""
+        if len(lines) > 2:
+            body += " " + lines[2].strip()
+
+        # Clean significance tags from body text
+        body = body.replace("🔴 High", "").replace("🟡 Medium", "").strip()
+        body = re.sub(r"Significance:\s*", "", body).strip()
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
 
         for line in lines[1:]:
             line = line.strip()
@@ -395,6 +555,7 @@ def _story_to_html(story: dict) -> str:
 
     return f"""<div style="border-left:4px solid {border};padding:14px 18px;
                            margin-bottom:18px;background:#fafafa;border-radius:0 6px 6px 0;">
+<<<<<<< HEAD
   <p style="margin:0 0 6px;font-size:16px;font-weight:700;color:#1a1a2e;">
     {story['headline']} &nbsp;{badge}
   </p>
@@ -416,6 +577,11 @@ def _build_source_table() -> str:
             f'font-weight:bold;white-space:nowrap;">{s["name"]}</td>'
             f'<td style="padding:3px 0;font-size:12px;color:#666;">{s["description"]}</td></tr>'
             for s in sources
+=======
+              <p style="margin:0 0 6px;font-size:16px;font-weight:700;color:#1a1a2e;">{headline} {badge}</p>
+              <p style="margin:0;font-size:14px;color:#444;line-height:1.6;">{body}{source_link_html}</p>
+            </div>"""
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
         )
 
     return f"""<table width="100%" cellpadding="0" cellspacing="0">
@@ -438,6 +604,10 @@ def _build_source_table() -> str:
 def build_html_email(digest: str, run_time: datetime) -> str:
     time_str = run_time.strftime("%A, %B %d, %Y — %H:%M UTC")
     slot = "Morning" if run_time.hour < 14 else "Evening"
+<<<<<<< HEAD
+=======
+    digest_html = _digest_to_html(digest, articles)
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
 
     stories = _parse_digest(digest)
     stories_html = "\n".join(_story_to_html(s) for s in stories) if stories else (
@@ -503,8 +673,12 @@ def build_html_email(digest: str, run_time: datetime) -> str:
         <tr><td style="background:#1a1a2e;padding:20px 40px;border-radius:0 0 10px 10px;
                         text-align:center;">
           <p style="margin:0;color:#7a8898;font-size:11px;">
+<<<<<<< HEAD
             Automated digest &nbsp;·&nbsp; Powered by Groq &nbsp;·&nbsp;
             Delivered via Resend
+=======
+            Automated digest · Powered by Groq (Llama 3.3) · Delivered via Resend
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
           </p>
         </td></tr>
 
@@ -570,11 +744,30 @@ def main() -> None:
         print(f"Only {len(articles)} articles found (need >= 5). Aborting.", file=sys.stderr)
         sys.exit(1)
 
+<<<<<<< HEAD
     print("\nStep 2/3 — Generating AI digest with Groq...")
     digest = summarize_with_groq(articles)
     print("\n--- Digest preview (first 600 chars) ---")
     print(digest[:600])
     print("...\n")
+=======
+    # 2. Summarize — try Groq first (generous free tier), fall back to Gemini
+    digest: str
+    if os.environ.get("GROQ_API_KEY"):
+        try:
+            print("\nStep 2/3 — Generating AI digest with Groq...")
+            digest = summarize_with_groq(articles)
+        except Exception as groq_exc:
+            print(f"  Groq failed ({groq_exc!r}), falling back to Gemini...")
+            print("\nStep 2/3 (fallback) — Generating AI digest with Gemini...")
+            digest = summarize_with_gemini(articles)
+    else:
+        print("\nStep 2/3 — Generating AI digest with Gemini...")
+        digest = summarize_with_gemini(articles)
+    print("\n--- Digest preview (first 500 chars) ---")
+    print(digest[:500])
+    print("...")
+>>>>>>> origin/claude/israeli-news-aggregator-R4YKx
 
     print("Step 3/3 — Sending email via Resend...")
     html = build_html_email(digest, run_time)
