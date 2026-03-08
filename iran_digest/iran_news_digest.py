@@ -3,7 +3,7 @@
 Iran News Digest
 Fetches Iran-related news from English-language Iranian RSS feeds (categorised as
 pro-regime or anti-regime), deduplicates cross-source stories, summarises via
-Google Gemini, and sends an HTML email via Resend.
+Groq, and sends an HTML email via Resend.
 """
 
 import os
@@ -12,7 +12,7 @@ import re
 import time
 import requests
 import feedparser
-import google.generativeai as genai
+from groq import Groq
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -198,8 +198,10 @@ def fetch_articles() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# AI Summarization (Google Gemini)
+# AI Summarization (Groq)
 # ---------------------------------------------------------------------------
+
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 GEMINI_PROMPT = """You are a senior analyst specializing in Iranian affairs.
 
@@ -236,13 +238,13 @@ Sources: [Comma-separated list of all outlet names that reported this]
 {articles}"""
 
 
-def summarize_with_gemini(articles: list[dict]) -> str:
-    """Call Gemini with the dual-perspective prompt; tries multiple models on quota errors."""
-    api_key = os.environ.get("GEMINI_API_KEY")
+def summarize_with_groq(articles: list[dict]) -> str:
+    """Call Groq with the dual-perspective prompt."""
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is not set")
+        raise ValueError("GROQ_API_KEY environment variable is not set")
 
-    genai.configure(api_key=api_key)
+    client = Groq(api_key=api_key)
 
     # Build article text — cap at 30 articles, label each with bias
     article_lines = []
@@ -258,38 +260,26 @@ def summarize_with_gemini(articles: list[dict]) -> str:
     articles_text = "\n\n".join(article_lines)
     prompt = GEMINI_PROMPT.format(articles=articles_text)
 
-    generation_config = genai.GenerationConfig(temperature=0.3, max_output_tokens=2048)
-
-    # Each model has its own independent quota; move to next on any 429
-    models_to_try = [
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash-8b",
-        "gemini-2.0-flash",
-    ]
     last_exc: Exception = RuntimeError("No models attempted")
-
-    for model_name in models_to_try:
-        model = genai.GenerativeModel(model_name)
-        for attempt in range(3):
-            try:
-                print(f"  Calling {model_name} (attempt {attempt + 1})...")
-                response = model.generate_content(prompt, generation_config=generation_config)
-                return response.text.strip()
-            except Exception as exc:
-                last_exc = exc
-                err_str = str(exc)
-                reason = str(exc).split("\n")[0][:120]
-                if "429" in err_str:
-                    quota_type = "daily" if "PerDay" in err_str else "per-minute"
-                    print(f"  {model_name} {quota_type} quota exceeded — trying next model")
-                    break
-                elif attempt < 2:
-                    wait = 2 ** (attempt + 1)
-                    print(f"  {model_name} error, retrying in {wait}s: {reason}")
-                    time.sleep(wait)
-                else:
-                    print(f"  {model_name} unavailable: {reason}")
-                    break
+    for attempt in range(3):
+        try:
+            print(f"  Calling {GROQ_MODEL} (attempt {attempt + 1})...")
+            response = client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=2048,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as exc:
+            last_exc = exc
+            reason = str(exc).split("\n")[0][:120]
+            if attempt < 2:
+                wait = 2 ** (attempt + 1)
+                print(f"  Error, retrying in {wait}s: {reason}")
+                time.sleep(wait)
+            else:
+                print(f"  Failed: {reason}")
 
     raise last_exc
 
@@ -498,7 +488,7 @@ def build_html_email(digest: str, run_time: datetime) -> str:
         <tr><td style="background:#1a1a2e;padding:20px 40px;border-radius:0 0 10px 10px;
                         text-align:center;">
           <p style="margin:0;color:#7a8898;font-size:11px;">
-            Automated digest &nbsp;·&nbsp; Powered by Google Gemini &nbsp;·&nbsp;
+            Automated digest &nbsp;·&nbsp; Powered by Groq &nbsp;·&nbsp;
             Delivered via Resend
           </p>
         </td></tr>
@@ -565,8 +555,8 @@ def main() -> None:
         print(f"Only {len(articles)} articles found (need >= 5). Aborting.", file=sys.stderr)
         sys.exit(1)
 
-    print("\nStep 2/3 — Generating AI digest with Gemini...")
-    digest = summarize_with_gemini(articles)
+    print("\nStep 2/3 — Generating AI digest with Groq...")
+    digest = summarize_with_groq(articles)
     print("\n--- Digest preview (first 600 chars) ---")
     print(digest[:600])
     print("...\n")
