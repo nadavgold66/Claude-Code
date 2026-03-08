@@ -246,9 +246,13 @@ def summarize_with_groq(articles: list[dict]) -> str:
 
     client = Groq(api_key=api_key)
 
-    # Build article text — cap at 30 articles, label each with bias
+    # Build article text — balanced 15 pro + 15 anti, sorted by date within each group
+    pro = [a for a in articles if a["bias"] == "pro-regime"][:15]
+    anti = [a for a in articles if a["bias"] == "anti-regime"][:15]
+    balanced = sorted(pro + anti, key=lambda a: a["published"], reverse=True)
+
     article_lines = []
-    for i, a in enumerate(articles[:30], 1):
+    for i, a in enumerate(balanced, 1):
         pub = a["published"].strftime("%b %d, %H:%M UTC")
         bias_tag = "[PRO-REGIME]" if a["bias"] == "pro-regime" else "[ANTI-REGIME]"
         article_lines.append(
@@ -287,6 +291,18 @@ def summarize_with_groq(articles: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 # Email rendering
 # ---------------------------------------------------------------------------
+
+_NEGATIVE_ANGLE_PHRASES = (
+    "not covered", "no coverage", "did not cover", "did not report",
+    "not reported", "not mentioned", "not addressed", "no anti-regime",
+    "no pro-regime", "not available", "n/a",
+)
+
+def _is_real_angle(text: str) -> bool:
+    """Return False if the AI wrote a 'not covered' placeholder instead of real content."""
+    low = text.lower()
+    return bool(text) and not any(p in low for p in _NEGATIVE_ANGLE_PHRASES)
+
 
 def _parse_digest(digest: str) -> list[dict]:
     """
@@ -329,9 +345,11 @@ def _parse_digest(digest: str) -> list[dict]:
             if low.startswith("summary:"):
                 story["summary"] = line[len("summary:"):].strip()
             elif low.startswith("pro-regime angle:"):
-                story["pro_angle"] = line[len("pro-regime angle:"):].strip()
+                val = line[len("pro-regime angle:"):].strip()
+                story["pro_angle"] = val if _is_real_angle(val) else ""
             elif low.startswith("anti-regime angle:"):
-                story["anti_angle"] = line[len("anti-regime angle:"):].strip()
+                val = line[len("anti-regime angle:"):].strip()
+                story["anti_angle"] = val if _is_real_angle(val) else ""
             elif low.startswith("sources:"):
                 raw = line[len("sources:"):].strip()
                 story["sources"] = [s.strip() for s in raw.split(",") if s.strip()]
